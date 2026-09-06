@@ -2,7 +2,7 @@
   "name": "kzt_rub_converter",
   "common_name": "KZT to RUB Converter",
   "description": "Shows approximate RUB prices near KZT prices in the Steam store.",
-  "version": "1.1.0",
+  "version": "1.1.2",
   "useBackend": true,
   "backend": "backend",
   "backendType": "lua"

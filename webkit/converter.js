@@ -1,9 +1,8 @@
 (function () {
   var FALLBACK_RUB_PER_KZT = 1 / 6;
-  var INITIAL_RUB_PER_KZT = "__KZT_RUB_RATE__";
-  var INITIAL_RATE_SOURCE = "__KZT_RUB_SOURCE__";
-  var RUB_PER_KZT = Number(INITIAL_RUB_PER_KZT) > 0 ? Number(INITIAL_RUB_PER_KZT) : FALLBACK_RUB_PER_KZT;
-  var RATE_SOURCE = INITIAL_RATE_SOURCE !== "__KZT_RUB_SOURCE__" ? INITIAL_RATE_SOURCE : "Offline converter";
+  var CONFIG = window.KZT_RUB_CONVERTER_CONFIG || {};
+  var RUB_PER_KZT = Number(CONFIG.rubPerKzt) > 0 ? Number(CONFIG.rubPerKzt) : FALLBACK_RUB_PER_KZT;
+  var RATE_SOURCE = CONFIG.source || "Offline converter";
   var CONVERTED_CLASS = "kzt-rub-converted";
   var PROCESSED_ATTR = "data-kzt-rub-processed";
   var KZT_SYMBOL = "₸";

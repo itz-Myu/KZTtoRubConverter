@@ -1,13 +1,10 @@
 local PLUGIN_NAME = "kzt_rub_converter"
-local STORE_REGEX = "^https://store\\.steampowered\\.com/.*"
-local RELATIVE_JS_PATH = "plugins/kzt_rub_converter/converter.js"
-local RELATIVE_CSS_PATH = "plugins/kzt_rub_converter/converter.css"
+local WEBKIT_LOADER_PATH = ".millennium\\Dist\\webkit.js"
+local WEBKIT_CONFIG_PATH = ".millennium\\Dist\\converter_config.js"
 
 local millennium = nil
 local logger = nil
 local plugin_log_path = nil
-local js_module_id = nil
-local css_module_id = nil
 local FALLBACK_RUB_PER_KZT = 1 / 6
 local RATE_TIMEOUT_SECONDS = 10
 local RATE_PROVIDERS = {
@@ -184,22 +181,6 @@ local function command_succeeded(result)
     return false
 end
 
-local function can_write_to_directory(path)
-    local normalized = normalize_path(path)
-    local probe_path = path_join(normalized, ".kzt_rub_converter_write_test.tmp")
-    local handle = io.open(probe_path, "wb")
-
-    if not handle then
-        return false
-    end
-
-    handle:write("ok")
-    handle:close()
-    os.remove(probe_path)
-
-    return true
-end
-
 local function file_exists(path)
     local handle = io.open(normalize_path(path), "rb")
     if handle then
@@ -207,13 +188,6 @@ local function file_exists(path)
         return true
     end
     return false
-end
-
-local function directory_exists(path)
-    local normalized = normalize_path(path)
-    local command = 'if exist "' .. normalized .. '\\NUL" (exit /b 0) else (exit /b 1)'
-
-    return command_succeeded(os.execute(command))
 end
 
 local function read_file(path)
@@ -257,52 +231,12 @@ local function write_file(path, content)
     return true
 end
 
-local function ensure_directory(path)
-    local normalized = normalize_path(path)
-
-    if normalized == "" then
-        return nil, "directory path is empty"
-    end
-
-    if directory_exists(normalized) or can_write_to_directory(normalized) then
-        return true
-    end
-
-    local command = 'mkdir "' .. normalized .. '" >nul 2>nul'
-    if command_succeeded(os.execute(command)) then
-        return true
-    end
-
-    if directory_exists(normalized) or can_write_to_directory(normalized) then
-        return true
-    end
-
-    log_warn("could not verify directory after mkdir, continuing so file write can report the real error: " .. normalized)
-    return true
-end
-
-local function copy_file(source, destination)
-    local content, read_err = read_file(source)
-    if not content then
-        return nil, read_err
-    end
-
-    local destination_dir = normalize_path(destination):gsub("\\[^\\]+$", "")
-    local ok, ensure_err = ensure_directory(destination_dir)
-    if not ok then
-        return nil, ensure_err
-    end
-
-    local write_ok, write_err = write_file(destination, content)
-    if not write_ok then
-        return nil, write_err
-    end
-
-    return true
-end
-
 local function escape_js_string(value)
-    return tostring(value or ""):gsub("\\", "\\\\"):gsub('"', '\\"')
+    return tostring(value or "")
+        :gsub("\\", "\\\\")
+        :gsub('"', '\\"')
+        :gsub("\r", "\\r")
+        :gsub("\n", "\\n")
 end
 
 local function fetch_url_content(url, destination_path, timeout_seconds)
@@ -353,33 +287,14 @@ local function resolve_exchange_rate()
     return FALLBACK_RUB_PER_KZT, "Offline converter"
 end
 
-local function build_converter_js(source_path, destination_path, rate, source_name)
-    local content, read_err = read_file(source_path)
-    local destination_dir
-    local ok
-    local ensure_err
-    local write_ok
-    local write_err
+local function write_webkit_config(path, rate, source_name)
+    local content = 'window.KZT_RUB_CONVERTER_CONFIG = { rubPerKzt: '
+        .. string.format("%.12f", rate)
+        .. ', source: "'
+        .. escape_js_string(source_name)
+        .. '" };\n'
 
-    if not content then
-        return nil, read_err
-    end
-
-    content = content:gsub("__KZT_RUB_RATE__", string.format("%.12f", rate), 1)
-    content = content:gsub("__KZT_RUB_SOURCE__", escape_js_string(source_name), 1)
-
-    destination_dir = normalize_path(destination_path):gsub("\\[^\\]+$", "")
-    ok, ensure_err = ensure_directory(destination_dir)
-    if not ok then
-        return nil, ensure_err
-    end
-
-    write_ok, write_err = write_file(destination_path, content)
-    if not write_ok then
-        return nil, write_err
-    end
-
-    return true
+    return write_file(path, content)
 end
 
 local function load_runtime_modules()
@@ -402,42 +317,21 @@ local function load_runtime_modules()
     end
 end
 
-local function get_steam_path()
-    local ok, result = pcall(function()
-        return millennium.steam_path()
-    end)
-
-    if not ok then
-        fail("millennium.steam_path() failed: " .. tostring(result))
-    end
-
-    if not result or tostring(result) == "" then
-        fail("millennium.steam_path() returned an empty path")
-    end
-
-    return normalize_path(result)
-end
-
-local function prepare_browser_assets()
+local function prepare_webkit_config()
     local plugin_dir = get_current_plugin_dir()
-    local steam_path = get_steam_path()
-    local steamui_dir = path_join(steam_path, "steamui")
-    local target_dir = path_join(steamui_dir, "plugins", PLUGIN_NAME)
     local source_js = path_join(plugin_dir, "webkit", "converter.js")
     local source_css = path_join(plugin_dir, "webkit", "converter.css")
-    local target_js = path_join(target_dir, "converter.js")
-    local target_css = path_join(target_dir, "converter.css")
+    local loader_path = path_join(plugin_dir, WEBKIT_LOADER_PATH)
+    local config_path = path_join(plugin_dir, WEBKIT_CONFIG_PATH)
     local ok, err
     local rate, rate_source
 
     log_info("backend loading")
     log_info("plugin path: " .. plugin_dir)
-    log_info("steam path: " .. steam_path)
-    log_info("steamui path: " .. steamui_dir)
     log_info("source JS: " .. source_js)
     log_info("source CSS: " .. source_css)
-    log_info("destination JS: " .. target_js)
-    log_info("destination CSS: " .. target_css)
+    log_info("WebKit loader: " .. loader_path)
+    log_info("WebKit config: " .. config_path)
 
     if not file_exists(source_js) then
         fail("source JS does not exist: " .. source_js)
@@ -447,45 +341,18 @@ local function prepare_browser_assets()
         fail("source CSS does not exist: " .. source_css)
     end
 
-    ok, err = ensure_directory(target_dir)
-    if not ok then
-        fail("failed to prepare destination directory: " .. tostring(err))
+    if not file_exists(loader_path) then
+        fail("WebKit loader does not exist: " .. loader_path)
     end
-    log_info("destination directory is ready")
 
     rate, rate_source = resolve_exchange_rate()
     log_info("Selected exchange rate source: " .. tostring(rate_source))
 
-    ok, err = build_converter_js(source_js, target_js, rate, rate_source)
+    ok, err = write_webkit_config(config_path, rate, rate_source)
     if not ok then
-        fail("failed to copy JS: " .. tostring(err))
+        fail("failed to write WebKit config: " .. tostring(err))
     end
-    log_info("copied JS successfully")
-
-    ok, err = copy_file(source_css, target_css)
-    if not ok then
-        fail("failed to copy CSS: " .. tostring(err))
-    end
-    log_info("copied CSS successfully")
-end
-
-local function register_browser_modules()
-    css_module_id = millennium.add_browser_css(RELATIVE_CSS_PATH, STORE_REGEX)
-    if not css_module_id or css_module_id == 0 then
-        fail("failed to register browser CSS module: " .. RELATIVE_CSS_PATH)
-    end
-    log_info("browser CSS registered successfully, module id: " .. tostring(css_module_id) .. ", regex: " .. STORE_REGEX)
-
-    js_module_id = millennium.add_browser_js(RELATIVE_JS_PATH, STORE_REGEX)
-    if not js_module_id or js_module_id == 0 then
-        if css_module_id and css_module_id ~= 0 then
-            millennium.remove_browser_module(css_module_id)
-            css_module_id = nil
-            log_warn("removed CSS module after JS registration failure")
-        end
-        fail("failed to register browser JS module: " .. RELATIVE_JS_PATH)
-    end
-    log_info("browser JS registered successfully, module id: " .. tostring(js_module_id) .. ", regex: " .. STORE_REGEX)
+    log_info("WebKit config written successfully")
 end
 
 local function log_convertation_providers()
@@ -503,25 +370,10 @@ local function on_load_impl()
 
     load_runtime_modules()
     log_convertation_providers()
-    prepare_browser_assets()
-    register_browser_modules()
+    prepare_webkit_config()
 
     log_info("calling millennium.ready()")
     millennium.ready()
-end
-
-local function on_unload_impl()
-    if css_module_id and css_module_id ~= 0 and millennium then
-        millennium.remove_browser_module(css_module_id)
-        css_module_id = nil
-        log_info("browser CSS module removed")
-    end
-
-    if js_module_id and js_module_id ~= 0 and millennium then
-        millennium.remove_browser_module(js_module_id)
-        js_module_id = nil
-        log_info("browser JS module removed")
-    end
 end
 
 local function on_load()
@@ -539,10 +391,6 @@ local function on_load()
 end
 
 local function on_unload()
-    local ok, err = xpcall(on_unload_impl, debug.traceback)
-    if not ok then
-        log_error("on_unload failed:\n" .. tostring(err))
-    end
 end
 
 return {
